@@ -1,99 +1,126 @@
-## 🧠 git-secret-scan
-A lightweight Python tool that scans the last N commits of a Git repository for possible secrets (like API keys, passwords, or private keys) using simple heuristics, regex patterns and entropy analysis.
+# 🔍 git-secret-scan
 
-## 🔧 Features
+A Python-based security tool that scans Git repositories for secrets and sensitive data using a combination of LLM analysis, pattern matching, and entropy detection.
 
-Scans:
+## 🌟 Features
 
-Added lines in recent commits
+### Detection Methods
 
-Commit messages
+- **Pattern Matching** - Recognizes common secret patterns:
+  - Private keys (RSA, EC, DSA, OpenSSH)
+  - AWS credentials (Access Key IDs)
+  - GitHub tokens
+  - Generic API keys and secrets
+- **Entropy Analysis** - Identifies high-entropy strings that might be encoded secrets
+- **LLM Validation** - Optional GPT-3.5-turbo powered analysis to reduce false positives
 
-Detects secrets using:
+### Scanning Scope
 
-Regex rules (e.g., AWS, GitHub, API_KEY, PRIVATE KEY)
+- Analyzes the last N commits in a repository
+- Examines both added lines and commit messages
+- Provides line-precise locations of findings
 
-Entropy analysis (flags random-looking tokens)
+## 🚀 Quick Start
 
-Generates a single JSON report containing:
-
-Commit hash
-
-File path
-
-Line number
-
-Snippet of suspicious text
-
-Detection method and confidence
-
-Simple rationale
-
-Optional: extendable with LLM (AI) rescoring for smarter classification.
-
-## 🧩 Example Usage
+1. **Install Dependencies**
 
 ```bash
-# Scan current repo, last 15 commits
-python scan.py --repo . --n 15 --out report.json
+pip install -r requirements.txt
 ```
-# Output example (report.json):
 
+2. **Basic Scan** (Pattern matching & entropy only)
+
+```bash
+python scan.py --repo . --n 5 --out report.json --llm none
+```
+
+3. **Advanced Scan** (With LLM validation)
+
+```bash
+# Set your OpenAI API key first
+set OPENAI_API_KEY=sk-your-key-here  # Windows
+export OPENAI_API_KEY=sk-your-key-here  # Linux/Mac
+
+# Run scan with LLM validation
+python scan.py --repo . --n 5 --out report.json --llm gpt-3.5-turbo
+```
+
+## 💻 Command-Line Options
+
+```bash
+python scan.py [options]
+
+Options:
+  --repo PATH          Path to Git repository to scan
+  --n NUMBER          Number of recent commits to analyze (default: 50)
+  --out FILE          Output JSON report path (default: report.json)
+  --llm MODEL         LLM model to use (choices: gpt-3.5-turbo, none)
+```
+
+## 📊 Output Format
+
+The tool generates a detailed JSON report:
+
+```json
 {
   "repo": ".",
-  
-  "commits_scanned": 3,
-  
-  "llm": "none", 
-  
-  "findings": []
+  "commits_scanned": 5,
+  "llm": "gpt-3.5-turbo",
+  "findings": [
+    {
+      "commit": "abc123...",
+      "file": "config.py",
+      "line": 42,
+      "finding_type": "generic_secret_kv",
+      "context": "added_line",
+      "snippet": "API_KEY = 'secret123'",
+      "rationale": "Variable name and pattern suggest an API key",
+      "confidence": 0.95,
+      "method": "regex"
+    }
+  ]
 }
-
-## ⚙️ Requirements
-Python 3.9+
-
-Git installed and available in your system path
-
-(Optional) OpenAI API key for LLM rescoring
-
-## 💡 Optional: Enable LLM rescoring
-
-You can extend the script to use an LLM (like OpenAI GPT) to validate findings and reduce false positives.
-
-# Example:
-```bash
-export OPENAI_API_KEY="sk-xxxx"
-python scan.py --repo . --n 10 --out report.json --llm gpt
 ```
 
-This will add:
+## 🎯 Example Detections
 
-A short AI-generated rationale for each finding
+1. **API Keys in Config Files**
 
-An estimated confidence score
+```python
+API_KEY = "sk-1234567890abcdef"
+SECRET_TOKEN = "ghp_abcdefghijklmnopqrstuvwxyz"
+```
 
-Optional llm_label field (secret, likely_secret, not_secret)
+2. **AWS Credentials**
 
-## 🧰 Example Report (LLM enabled)
+```python
+aws_access_key_id = "AKIAXXXXXXXXXXXXXXXX"
+```
 
-{
-  "commit": "a1b2c3d",
-  
-  "file": "config/settings.py",
-  
-  "line": 42,
-  
-  "finding_type": "generic_secret_kv",
-  
-  "context": "added_line",
-  
-  "snippet": "API_KEY = 'sk-12345abcdef...'",
-  
-  "rationale": "Looks like an API key assignment.",
-  
-  "confidence": 0.87,
-  
-  "method": "regex",
-  
-  "llm_label": "likely_secret"
-}
+3. **Private Keys**
+
+```
+-----BEGIN RSA PRIVATE KEY-----
+...
+```
+
+4. **High-Entropy Strings** (potential encoded secrets)
+
+```python
+token = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9..."
+```
+
+## 📋 Requirements
+
+- Python 3.9 or higher
+- Git installed and in system PATH
+- For LLM validation:
+  - OpenAI API key
+  - Internet connection
+
+## 🛡️ Security Note
+
+- The tool may produce false positives
+- Always review findings manually
+- Consider using `--llm gpt-3.5-turbo` for better accuracy when possible
+- The tool does NOT upload your code to OpenAI - only suspicious snippets are sent for validation
