@@ -1,15 +1,22 @@
 import re
 import argparse, subprocess, math, json, pathlib, sys
 from collections import Counter
+import os, openai
+openai.api_key = os.getenv("OPENAI_API_KEY")
+
 
 ap = argparse.ArgumentParser()
 ap.add_argument("--repo", required=True)
 ap.add_argument("--n", type=int, default=50)
 ap.add_argument("--out", default="report.json")
+ap.add_argument("--llm", choices=["gpt-3.5-turbo", "none"], default="gpt-3.5-turbo",
+                help="LLM model to use for validation (default: gpt-3.5-turbo if OPENAI_API_KEY set, otherwise none)")
 args = ap.parse_args()
 
 def run(cmd, cwd=None):
-    r = subprocess.run(cmd, cwd=cwd, text=True,
+    # Force UTF-8 decoding and replace undecodable bytes to avoid
+    # UnicodeDecodeError on Windows terminals with non-UTF8 content.
+    r = subprocess.run(cmd, cwd=cwd, text=True, encoding="utf-8", errors="replace",
                     stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
     if r.returncode != 0: raise RuntimeError(r.stdout)
     return r.stdout
@@ -77,39 +84,87 @@ def entropy_candidates(text):
                         "match": token, "snippet": text.strip()[:200]})
     return out
 
-def scan_commit(repo, commit):
+def scan_commit(repo, commit,use_llm: bool):
     items=[]
     msg = get_msg(repo, commit)
+    def enrich(fdict):
+        # attach rationale/confidence: LLM if allowed, otherwise heuristic
+        if use_llm:
+            r = llm_check(fdict["snippet"], fdict["type"])
+            if isinstance(r, dict) and "confidence" in r:
+                fdict["rationale"] = r.get("rationale", "LLM check")
+                fdict["confidence"] = float(r.get("confidence", 0.6))
+                return
+        # heuristic fallback
+        fdict["rationale"] = "Heuristic (regex/entropy). Needs review."
+        fdict["confidence"] = 0.6 if fdict["method"] == "regex" else 0.5
+
     for f in regex_findings(msg)+entropy_candidates(msg):
-        items.append({"commit":commit,"file":None,"line":None,"context":"commit_message",**f})
+        enrich(f)
+        items.append({"commit": commit, "file": None, "line": None,
+                      "context": "commit_message", **f})
 
     diff = get_diff(repo, commit)
     for path, ln, txt in iter_added(diff):
         for f in regex_findings(txt)+entropy_candidates(txt):
+            enrich(f)
             items.append({"commit":commit,"file":path,"line":ln,"context":"added_line",**f})
     return items
 
+
+def llm_check(snippet, pattern_type):
+    if not os.getenv("OPENAI_API_KEY"):
+        return None
+    try:
+        prompt = f"Does the following line likely contain a secret (API key, password, token, etc.)?\nLine: {snippet}\nPattern type: {pattern_type}\nRespond in JSON with fields: rationale, confidence (0 to 1)."
+        response = openai.ChatCompletion.create(
+            model="gpt-3.5-turbo",
+            messages=[{"role": "user", "content": prompt}],
+            temperature=0
+        )
+        content = response.choices[0].message.content.strip()
+        try:
+            return json.loads(content)
+        except Exception:
+            # If model answered text, give a reasonable fallback
+            return {"rationale": "LLM non-JSON response; likely secret. Review.", "confidence": 0.7}
+    except Exception as e:
+        return {"rationale": f"Error occurred: {e}", "confidence": 0.6}
+    except Exception as e:
+        return {"rationale": f"LLM error: {e}", "confidence": 0.6}
+
+
     
 def main():
-    # ... argparse as before
     commits = get_commits(args.repo, args.n)
+    # Use LLM only if requested and API key is available
+    use_llm = (args.llm == "gpt-3.5-turbo" and os.getenv("OPENAI_API_KEY"))
+
     findings=[]
     for c in commits:
-        findings.extend(scan_commit(args.repo, c))
+        findings.extend(scan_commit(args.repo, c, use_llm))
 
-    # add simple rationale/confidence
-    for f in findings:
-        f["rationale"] = "Heuristic (regex/entropy). Needs review."
-        f["confidence"] = 0.6 if f["method"]=="regex" else 0.5
-
-    report = {"repo": args.repo, "commits_scanned": len(commits), "llm":"none",
-            "findings":[
-            {"commit":f["commit"],"file":f["file"],"line":f["line"],
-            "finding_type":f["type"],"context":f["context"],
-            "snippet":f["snippet"],"match_sample":(f["match"][:60] if isinstance(f["match"],str) else None),
-            "rationale":f["rationale"],"confidence":f["confidence"],"method":f["method"]}
+    # Build report matching desired format
+    llm_model = "gpt-3.5-turbo" if use_llm else "none"
+    report = {
+        "repo": args.repo,
+        "commits_scanned": len(commits),
+        "llm": llm_model,
+        "findings": [
+            {
+                "commit": f["commit"],
+                "file": f["file"],
+                "line": f["line"],
+                "finding_type": f["type"],
+                "context": f["context"],
+                "snippet": f["snippet"],
+                "rationale": f["rationale"],
+                "confidence": f["confidence"],
+                "method": f["method"]
+            }
             for f in findings
-        ]}
+        ]
+    }
     pathlib.Path(args.out).write_text(json.dumps(report, indent=2), encoding="utf-8")
     print(f"Findings: {len(report['findings'])}. Report: {args.out}")
 

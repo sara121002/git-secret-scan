@@ -1,6 +1,18 @@
 {
   "repo": ".",
-  "commits_scanned": 3,
-  "llm": "none",
-  "findings": []
+  "commits_scanned": 5,
+  "llm": "gpt-3.5-turbo",
+  "findings": [
+    {
+      "commit": "88232bc76ebc2531172ad9283d204e9cbdab29b8",
+      "file": "test_config.py",
+      "line": 1,
+      "finding_type": "high_entropy_candidate",
+      "context": "added_line",
+      "snippet": "API_KEY = \"sk-test123456789abcdef\"",
+      "rationale": "Error occurred: \n\nYou tried to access openai.ChatCompletion, but this is no longer supported in openai>=1.0.0 - see the README at https://github.com/openai/openai-python for the API.\n\nYou can run `openai migrate` to automatically upgrade your codebase to use the 1.0.0 interface. \n\nAlternatively, you can pin your installation to the old version, e.g. `pip install openai==0.28`\n\nA detailed migration guide is available here: https://github.com/openai/openai-python/discussions/742\n",
+      "confidence": 0.6,
+      "method": "entropy"
+    }
+  ]
 }
