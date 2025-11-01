@@ -1,8 +1,19 @@
 {
   "repo": ".",
   "commits_scanned": 5,
-  "llm": "gpt-3.5-turbo",
+  "llm": "none",
   "findings": [
+    {
+      "commit": "e79532fa9da99bd7378c2ed40d5b78a4c0d5dced",
+      "file": "report.json",
+      "line": 15,
+      "finding_type": "high_entropy_candidate",
+      "context": "added_line",
+      "snippet": "\"snippet\": \"API_KEY = \\\"sk-test123456789abcdef\\\"\",",
+      "rationale": "High entropy string detected - possibly an encoded secret or key.",
+      "confidence": 0.5,
+      "method": "entropy"
+    },
     {
       "commit": "88232bc76ebc2531172ad9283d204e9cbdab29b8",
       "file": "test_config.py",
@@ -10,8 +21,8 @@
       "finding_type": "high_entropy_candidate",
       "context": "added_line",
       "snippet": "API_KEY = \"sk-test123456789abcdef\"",
-      "rationale": "Error occurred: \n\nYou tried to access openai.ChatCompletion, but this is no longer supported in openai>=1.0.0 - see the README at https://github.com/openai/openai-python for the API.\n\nYou can run `openai migrate` to automatically upgrade your codebase to use the 1.0.0 interface. \n\nAlternatively, you can pin your installation to the old version, e.g. `pip install openai==0.28`\n\nA detailed migration guide is available here: https://github.com/openai/openai-python/discussions/742\n",
-      "confidence": 0.6,
+      "rationale": "High entropy string detected - possibly an encoded secret or key.",
+      "confidence": 0.5,
       "method": "entropy"
     }
   ]

@@ -88,16 +88,17 @@ def scan_commit(repo, commit,use_llm: bool):
     items=[]
     msg = get_msg(repo, commit)
     def enrich(fdict):
-        # attach rationale/confidence: LLM if allowed, otherwise heuristic
+        # attach rationale/confidence: LLM if enabled and available, otherwise heuristic
         if use_llm:
             r = llm_check(fdict["snippet"], fdict["type"])
-            if isinstance(r, dict) and "confidence" in r:
-                fdict["rationale"] = r.get("rationale", "LLM check")
-                fdict["confidence"] = float(r.get("confidence", 0.6))
+            if isinstance(r, dict) and "rationale" in r and "confidence" in r:
+                fdict["rationale"] = r["rationale"]
+                fdict["confidence"] = float(r["confidence"])
                 return
-        # heuristic fallback
-        fdict["rationale"] = "Heuristic (regex/entropy). Needs review."
-        fdict["confidence"] = 0.6 if fdict["method"] == "regex" else 0.5
+
+        # Use descriptive heuristic fallback if LLM fails or is disabled
+        fdict["rationale"] = get_default_rationale(fdict["type"])
+        fdict["confidence"] = 0.7 if fdict["method"] == "regex" else 0.5  # Regex patterns are more specific
 
     for f in regex_findings(msg)+entropy_candidates(msg):
         enrich(f)
@@ -112,11 +113,37 @@ def scan_commit(repo, commit,use_llm: bool):
     return items
 
 
+def get_default_rationale(finding_type):
+    """Get a descriptive rationale based on the type of finding."""
+    if finding_type == "high_entropy_candidate":
+        return "High entropy string detected - possibly an encoded secret or key."
+    elif finding_type == "generic_secret_kv":
+        return "Variable name suggests a secret/key, with assigned value matching secret pattern."
+    elif finding_type == "aws_access_key_id":
+        return "AWS Access Key ID pattern detected."
+    elif finding_type == "github_token":
+        return "GitHub personal access token pattern detected."
+    elif finding_type == "private_key":
+        return "Private key header detected - possibly a cryptographic key."
+    return f"Pattern matching {finding_type} detected."
+
 def llm_check(snippet, pattern_type):
+    """Check if a line contains a secret using LLM. Returns None if API key not set."""
     if not os.getenv("OPENAI_API_KEY"):
         return None
+        
     try:
-        prompt = f"Does the following line likely contain a secret (API key, password, token, etc.)?\nLine: {snippet}\nPattern type: {pattern_type}\nRespond in JSON with fields: rationale, confidence (0 to 1)."
+        # Construct a more specific prompt
+        prompt = f"""Analyze this line for potential secrets/credentials:
+Line: {snippet}
+Pattern found: {pattern_type}
+
+Respond with JSON containing:
+1. rationale: Brief explanation of why this might be a secret
+2. confidence: Number 0-1 indicating likelihood of being a real secret
+
+Example response: {{"rationale": "Contains what appears to be an API key in a variable assignment", "confidence": 0.95}}"""
+
         response = openai.ChatCompletion.create(
             model="gpt-3.5-turbo",
             messages=[{"role": "user", "content": prompt}],
@@ -124,28 +151,49 @@ def llm_check(snippet, pattern_type):
         )
         content = response.choices[0].message.content.strip()
         try:
-            return json.loads(content)
-        except Exception:
-            # If model answered text, give a reasonable fallback
-            return {"rationale": "LLM non-JSON response; likely secret. Review.", "confidence": 0.7}
+            result = json.loads(content)
+            if isinstance(result, dict) and "rationale" in result and "confidence" in result:
+                return result
+        except json.JSONDecodeError:
+            pass
+            
+        # If we got non-JSON or invalid response, construct a reasonable default
+        return {
+            "rationale": "LLM detected potential secret but gave invalid response.",
+            "confidence": 0.7
+        }
     except Exception as e:
-        return {"rationale": f"Error occurred: {e}", "confidence": 0.6}
-    except Exception as e:
-        return {"rationale": f"LLM error: {e}", "confidence": 0.6}
+        # Log the error if you want to debug
+        print(f"LLM check failed: {e}", file=sys.stderr)
+        return None
 
 
     
 def main():
     commits = get_commits(args.repo, args.n)
-    # Use LLM only if requested and API key is available
-    use_llm = (args.llm == "gpt-3.5-turbo" and os.getenv("OPENAI_API_KEY"))
-
-    findings=[]
+    
+    # Try to validate first API call to determine if OpenAI works
+    api_key = os.getenv("OPENAI_API_KEY", "").strip()
+    use_llm = False
+    llm_model = "none"
+    
+    if args.llm == "gpt-3.5-turbo" and api_key:
+        try:
+            # Test API key with a simple call
+            openai.ChatCompletion.create(
+                model="gpt-3.5-turbo",
+                messages=[{"role": "user", "content": "test"}],
+                temperature=0,
+                max_tokens=1  # Minimal call to validate key
+            )
+            use_llm = True
+            llm_model = "gpt-3.5-turbo"
+        except Exception as e:
+            print(f"Warning: OpenAI API error ({str(e)}). Falling back to heuristic mode.", file=sys.stderr)
+    
+    findings = []
     for c in commits:
         findings.extend(scan_commit(args.repo, c, use_llm))
-
-    # Build report matching desired format
-    llm_model = "gpt-3.5-turbo" if use_llm else "none"
     report = {
         "repo": args.repo,
         "commits_scanned": len(commits),
